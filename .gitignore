@@ -1,0 +1,51 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# ===== Node / Frontend =====
+node_modules/
+frontend/packages/*/dist/
+frontend/packages/app/release/
+*.tsbuildinfo
+pnpm-lock.yaml
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ===== Environment =====
+.env
+*.env.local
+
+# ===== Test / Temp =====
+test_verify.db
+data_test/
+data/
+tmp/
+*.db-journal
+*.db-wal
+
+# ===== Coverage =====
+.coverage
+htmlcov/
+.pytest_cache/
+coverage.xml
+
+# ===== Lint caches =====
+.ruff_cache/
+.mypy_cache/
+.eslintcache
