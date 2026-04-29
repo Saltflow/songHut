@@ -1,0 +1,17 @@
+{
+  "name": "songhut-frontend",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @songhut/web dev",
+    "build:web": "pnpm --filter @songhut/web build",
+    "dev:desktop": "pnpm --filter @songhut/app dev",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
