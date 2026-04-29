@@ -1,0 +1,16 @@
+__pycache__/
+.venv/
+*.pyc
+*.pyo
+.env
+test_verify.db
+data_test/
+data/
+tmp/
+*.egg-info/
+dist/
+build/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
