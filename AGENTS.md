@@ -1,13 +1,20 @@
 # AGENTS.md — SongHut
 
+> This file provides context for AI coding assistants working on the SongHut codebase.
+> SongHut v2.0 is being actively refactored. See [`refactoring-plan/`](./refactoring-plan/) for design docs.
 
-Reasoning Effort: Absolute maximum with no shortcuts permitted.
-You MUST be very thorough in your thinking and comprehensively decompose the
-problem to resolve the root cause, rigorously stress-testing your logic against all potential
-paths, edge cases, and adversarial scenarios.
-Explicitly write out your entire deliberation process, documenting every intermediate
-step, considered alternative, and rejected hypothesis to ensure absolutely no assumption
-is left unchecked.
+## v2.0 模块 (active development)
+
+| 组件 | 路径 | 技术 |
+|------|------|------|
+| **Backend** | [`backend/`](./backend/) | FastAPI + SQLAlchemy + PostgreSQL |
+| **Frontend** | [`frontend/`](./frontend/) | React + TypeScript + Vite |
+
+- 后端验证: `cd backend && python verify.py` (32 tests, SQLite)
+- 前端构建: `cd frontend && pnpm build:web`
+- 部署: `docker compose up -d` (provides PostgreSQL + Redis)
+
+## v1.0 模块 (archive, for reference only)
 
 四独立子工程（无 monorepo 工具，无根级构建）：
 - `spring后台/songhut/songhut/` — Spring Boot 后台（端口 8080）
@@ -23,7 +30,7 @@ is left unchecked.
 
 - **无 `pom.xml` 或 `build.gradle`** → 只能通过 IntelliJ IDEA 构建，不能从 CLI 用 Maven/Gradle 编译。
 - 依赖 MyBatis 注解（无 XML mapper）、Druid 连接池、自定义 JWT。
-- MySQL 数据库 `songhut`，root / `Hetor@520`，`localhost:3306`（见 `util/DruidConfig.java:19`）。
+- MySQL 数据库 `songhut`，凭据见 `util/DruidConfig.java`，`localhost:3306`。
 - 文件存储 `E:/data`（Windows）或 `/home/songhut/data`（Linux）（`util/Constants.java:8`）。
 - 调用 Django 的地址：`http://localhost:8000/songhut/getMelody/`（`util/Constants.java:11`）。
 - CORS 过滤器：`CorsFilter.java`。
