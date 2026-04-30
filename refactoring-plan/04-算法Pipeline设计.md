@@ -1068,8 +1068,251 @@ def validate_audio(audio: AudioBuffer) -> Result[AudioBuffer, AppError]:
     if audio.duration_sec > 600:
         errors.append("音频过长 (最长 10 分钟)")
 
-    if errors:
+     if errors:
         return Err(AppError(code="VALIDATION_ERROR",
                              message="; ".join(errors)))
     return Ok(audio)
+```
+
+---
+
+## 8. 部署级设计：2 核 8GB 无 GPU Linux 约束
+
+### 8.1 目标环境
+
+| 维度 | 值 | 影响 |
+|------|----|------|
+| CPU | 2 核，无 GPU | 不能用 CUDA/cuDNN；深度学习模型必须 <10MB |
+| 内存 | 8 GB | 算法处理常驻 ≤800MB；剩余留给 OS + DB + Worker |
+| 操作系统 | Linux (华为云) | 路径分隔 `/`，不使用 `E:/data`；不依赖 Windows API |
+| 网络 | 低带宽 | 模型下载仅首次。运行时零外网依赖 |
+| 存储 | 40GB 云磁盘 | 算法缓存 ≤1GB；临时文件用完即删 |
+
+### 8.2 依赖策略：主方案 + 降级方案
+
+基于 2C8G 无 GPU 约束，所有检测器均需提供**轻量默认实现**。高级实现仅在依赖安装且模型已下载时才加载。
+
+| 阶段 | 主方案（当前可用） | 降级方案（零额外依赖） | 升档方案（Python 3.12+） |
+|------|-------------------|----------------------|------------------------|
+| 音高检测 | `librosa.pyin` | 自带 librosa，零模型 | `torchcrepe` tiny (300KB) |
+| 节拍跟踪 | `librosa.beat.beat_track` | 自带 librosa | `madmom` RNN (需 ~50MB 模型) |
+| 音符量化 | `DefaultQuantizer` | 纯 Python 规则引擎 | — |
+| MIDI 生成 | `pretty_midi` | 轻量纯 Python 库 | — |
+| 和弦分析 | `RuleBasedChordDetector` | 纯规则，零训练 | — |
+| 伴奏生成 | 规则模板 | 纯规则 | — |
+| MIDI → WAV | `midi2audio` / `FluidSynth` | 需要 SF2 文件 | — |
+
+**依赖清单（pyproject.toml algorithms 组）：**
+
+```toml
+[project.optional-dependencies]
+algorithms = [
+    "numpy>=1.26",
+    "scipy>=1.14",
+    "librosa>=0.10",          # pyin + beat_track + resample
+    "pretty-midi>=0.3",       # MIDI I/O
+    "music21>=9.3",            # MIDI → MusicXML (可选)
+    "soundfile>=0.12",        # WAV 读写 (librosa 依赖)
+]
+
+# 升档 (Python 3.12+)
+algorithms-plus = [
+    "torchcrepe>=0.0.14",     # CREPE 音高检测 (300KB model)
+    "madmom>=0.16",           # RNN 节拍跟踪 (~50MB model)
+    "midi2audio>=0.1",        # MIDI → WAV 合成 (需要 FluidSynth)
+]
+```
+
+### 8.3 性能预算
+
+| 阶段 | 时间预算 10s 音频 | 时间预算 60s 音频 | 内存峰值 |
+|------|-----------------|-----------------|---------|
+| 加载 & 重采样 | <0.3s | <1s | ~15MB |
+| pyin 音高检测 | ~2s | ~8s | ~80MB |
+| beat_track | ~0.5s | ~2s | ~20MB |
+| 量化 | <0.1s | <0.3s | ~5MB |
+| MIDI 生成 | <0.1s | <0.1s | ~2MB |
+| 和弦分析 | <0.2s | <0.5s | ~3MB |
+| 伴奏生成 | <0.2s | <0.5s | ~3MB |
+| **总计** | **~3.5s** | **~12.5s** | **~130MB** |
+
+> 约束：单次算法调用不超过 30s（FastAPI gunicorn timeout 默认值）。
+> 60s 音频 ≈ 普通哼唱一首歌的长度，12.5s 在 30s 安全线内。
+
+### 8.4 内存管理
+
+```python
+# 处理后显式释放大对象
+def humming_to_melody(audio: AudioBuffer, ...) -> MidiOutput:
+    import gc
+
+    frames = pitch_detector.detect(audio)
+    beats = beat_tracker.detect(audio)
+    notes = quantizer.quantize(frames, beats)
+
+    # 释放中间态——量化后的 Note 规模远小于 PitchFrame
+    del frames
+    gc.collect()
+
+    tracks = [midi_generator.generate(notes)]
+    del notes
+    ...
+
+    return MidiOutput(tracks=tracks, tempo_bpm=beats.bpm)
+```
+
+### 8.5 递归依赖检测（优雅降级）
+
+```python
+# app/algorithms/pitch/registry.py
+import importlib
+from typing import Iterator
+
+def available_detectors() -> Iterator[str]:
+    """按精度降序，列出当前环境可用的 PitchDetector 实现名。
+    eg: ['torchcrepe', 'pyin'] 或 ['pyin']"""
+    yield "pyin"  # 始终可用 (librosa 是必须依赖)
+
+    try:
+        importlib.import_module("torchcrepe")
+        yield "torchcrepe"
+    except ImportError:
+        pass
+
+    try:
+        importlib.import_module("parselmouth")
+        yield "parselmouth"
+    except ImportError:
+        pass
+
+
+def create_pitch_detector(name: str = "auto") -> PitchDetector:
+    """工厂函数：根据名称或 auto 选择最佳可用检测器。"""
+    if name == "auto":
+        # 取第一个可用 (= 精度最高)
+        name = next(available_detectors(), "pyin")
+
+    match name:
+        case "torchcrepe":
+            from app.algorithms.pitch.torchcrepe_detector import TorchCREPEDetector
+            return TorchCREPEDetector()
+        case "pyin":
+            from app.algorithms.pitch.pyin_detector import PyinDetector
+            return PyinDetector()
+        case _:
+            raise ValueError(f"Unknown pitch detector: {name}")
+```
+
+### 8.6 文件路径约定（Linux）
+
+```python
+# 算法内部使用 POSIX 路径，不依赖 Windows `\\`
+# 旧代码中 util.py 的 `getFilename()` 用 `\\` 分隔符 — 已废弃
+
+from pathlib import Path
+
+ALGORITHM_TEMP = Path("/tmp/songhut/algorithm")
+ALGORITHM_TEMP.mkdir(parents=True, exist_ok=True)
+
+def temp_midi_path(source_filename: str) -> str:
+    """生成临时 MIDI 输出路径。例如 'recording.wav' → '/tmp/songhut/algorithm/recording.mid'"""
+    stem = Path(source_filename).stem
+    return str(ALGORITHM_TEMP / f"{stem}.mid")
+```
+
+### 8.7 测试数据策略
+
+```python
+# backend/app/algorithms/tests/conftest.py
+import numpy as np
+import pytest
+from app.algorithms.audio import AudioBuffer
+
+@pytest.fixture
+def synthetic_scale() -> AudioBuffer:
+    """合成 5 音上行音阶 (C4 D4 E4 F4 G4), 44100Hz mono。
+    输出: 5 个音符, 各 0.5 秒, 静音间隙 0.05s。
+    用于验证 pitch → quantize → MIDI 全链路。"""
+    sr = 44100
+    freqs = [261.63, 293.66, 329.63, 349.23, 392.00]
+    note_dur = 0.5
+    gap_dur = 0.05
+    segments = []
+    for f in freqs:
+        t = np.linspace(0, note_dur, int(sr * note_dur), endpoint=False)
+        segments.append(0.8 * np.sin(2 * np.pi * f * t))
+        segments.append(np.zeros(int(sr * gap_dur)))
+    return AudioBuffer(
+        samples=np.concatenate(segments).astype(np.float32),
+        sample_rate=sr,
+        n_channels=1,
+    )
+
+@pytest.fixture
+def synthetic_click_track() -> AudioBuffer:
+    """合成 120BPM 节拍器音轨 (4/4, 8 小节)。
+    用于验证 beat_track 输出 BPM ±5%。"""
+    sr = 44100
+    bpm = 120
+    beat_interval = 60.0 / bpm
+    n_beats = 32  # 8 bars × 4 beats
+    duration = n_beats * beat_interval
+    signal = np.zeros(int(sr * duration), dtype=np.float32)
+    # 每拍一个短脉冲 (1kHz 正弦, 10ms)
+    click = 0.8 * np.sin(2 * np.pi * 1000 * np.linspace(0, 0.01, int(sr * 0.01)))
+    for i in range(n_beats):
+        start = int(i * beat_interval * sr)
+        end = start + len(click)
+        if end < len(signal):
+            signal[start:end] = click
+    return AudioBuffer(samples=signal, sample_rate=sr, n_channels=1)
+
+@pytest.fixture
+def synthetic_cmajor_chord() -> AudioBuffer:
+    """合成 C 大三和弦 (C4+E4+G4 同时响), 2 秒。
+    用于验证和弦检测输出 Cmaj。"""
+    sr = 44100
+    t = np.linspace(0, 2.0, int(sr * 2.0), endpoint=False)
+    signal = 0.5 * (
+        np.sin(2 * np.pi * 261.63 * t) +
+        np.sin(2 * np.pi * 329.63 * t) +
+        np.sin(2 * np.pi * 392.00 * t)
+    )
+    return AudioBuffer(samples=signal.astype(np.float32), sample_rate=sr, n_channels=1)
+```
+
+### 8.8 算法验收标准
+
+| 测试 | 输入 | 预期 | 容差 |
+|------|------|------|------|
+| `test_pitch_scale` | synthetic_scale (C-D-E-F-G) | 检测到 ≥4 个有效 note | 允许丢 1 个 |
+| `test_pitch_frequency` | synthetic_scale | 每段中值频率与已知值误差 | <5% |
+| `test_beat_bpm` | synthetic_click_track (120BPM) | 输出 BPM 118-122 | ±2 |
+| `test_quantize_count` | synthetic_scale pitch frames | 输出 5 个 Note | ±1 |
+| `test_quantize_pitch` | synthetic_scale | 输出 MIDI pitch [60,62,64,65,67] 顺序 | 可容忍 ±1 半音 |
+| `test_midi_valid` | 量化后的 Note[] | pretty_midi 可解析 | 0 错误 |
+| `test_midi_track_count` | 无伴奏 | 1 个 track (melody) | ≥1 |
+| `test_midi_track_count` | 加鼓+贝斯 | ≥3 个 tracks | ≥3 |
+| `test_pipeline_e2e` | synthetic WAV → pipeline | 输出合法 MIDI 且 BPM 100-140 | 0 错误 |
+| `test_chord_cmajor` | synthetic_cmajor_chord → chord detect | 输出 "Cmaj" | 精确匹配 |
+| `test_memory` | 60s WAV → pipeline 单次执行 | 内存增长 <200MB | 0 内存泄漏 |
+
+---
+
+## 9. 实施顺序
+
+| Phase | 内容 | 可验证 |
+|-------|------|--------|
+| **A** | `algorithms/audio.py` — AudioBuffer + load/resample/validate | synthetic_scale fixture |
+| **B** | `algorithms/pitch/pyin_detector.py` — libsora.pyin 实现 | test_pitch_scale |
+| **C** | `algorithms/beat/librosa_beat.py` — beat_track 实现 | test_beat_bpm |
+| **D** | `algorithms/midi/quantize.py` — 量化器 + snap_tolerance | test_quantize_* |
+| **E** | `algorithms/midi/generator.py` — pretty_midi 包装 | test_midi_* |
+| **F** | `algorithms/pipeline.py` — 全链路编排 | test_pipeline_e2e |
+| **G** | `algorithms/chord/` — 规则引擎 | test_chord_cmajor |
+| **H** | `algorithms/accompany/` — 鼓/贝斯/和弦伴奏 | test_midi_track_count |
+| **I** | `algorithms/score/converter.py` — MIDI → MusicXML | synthetic import 可解析 |
+| **J** | `algorithms/container.py` — 依赖组装 + 注册表 | 跨检测器切换测 |
+
+每个 Phase 的输出都是一个可运行的 Python 模块 + 一个 pytest 测试文件。
 ```
