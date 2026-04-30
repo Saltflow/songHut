@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuthStore } from '../../stores/auth.store';
-import { useProjectStore } from '../../stores/project.store';
+import { useAuth } from '../../hooks/useAuth';
+import { useProjects } from '../../hooks/useProjects';
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
-  const { projects, isLoading, fetchProjects, create } = useProjectStore();
+  const { user, logout } = useAuth();
+  const { projects, isLoading, fetchProjects, create } = useProjects();
   const [showNew, setShowNew] = useState(false);
   const [name, setName] = useState('');
 
@@ -48,20 +48,13 @@ export default function DashboardPage() {
             <h3 className="font-medium mb-3">创建新项目</h3>
             <div className="flex gap-3">
               <input
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
+                type="text" value={name} onChange={e => setName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && handleCreate()}
-                placeholder="项目名称"
-                autoFocus
+                placeholder="项目名称" autoFocus
                 className="flex-1 px-3 py-2 border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500"
               />
-              <button onClick={handleCreate} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">
-                创建
-              </button>
-              <button onClick={() => setShowNew(false)} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm">
-                取消
-              </button>
+              <button onClick={handleCreate} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">创建</button>
+              <button onClick={() => setShowNew(false)} className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm">取消</button>
             </div>
           </div>
         )}
@@ -81,9 +74,7 @@ export default function DashboardPage() {
                 onClick={() => navigate(`/projects/${project.id}`)}
                 className="bg-white rounded-xl shadow-sm p-5 cursor-pointer hover:shadow-md transition border border-transparent hover:border-indigo-200"
               >
-                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center text-2xl mb-3">
-                  🎹
-                </div>
+                <div className="w-12 h-12 bg-indigo-100 rounded-lg flex items-center justify-center text-2xl mb-3">🎹</div>
                 <h3 className="font-semibold text-gray-900 truncate">{project.name}</h3>
                 <p className="text-sm text-gray-500 mt-1 truncate">{project.description || '暂无描述'}</p>
                 <p className="text-xs text-gray-400 mt-2">

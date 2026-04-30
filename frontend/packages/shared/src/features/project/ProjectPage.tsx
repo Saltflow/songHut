@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useProjectStore } from '../../stores/project.store';
+import { useProjects } from '../../hooks/useProjects';
 import { filesApi } from '../../api/files';
-import { FileDto } from '../../api/types';
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { current, isLoading, fetchDetail, delete: deleteProject } = useProjectStore();
+  const { current, isLoading, fetchDetail, remove } = useProjects();
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
@@ -25,7 +24,7 @@ export default function ProjectPage() {
 
   async function handleDelete() {
     if (!projectId || !confirm('确定删除这个项目吗？所有文件将被永久删除。')) return;
-    const ok = await deleteProject(projectId);
+    const ok = await remove(projectId);
     if (ok) navigate('/');
   }
 
@@ -74,18 +73,14 @@ export default function ProjectPage() {
                   <p className="font-medium text-gray-900">{file.filename}</p>
                   <p className="text-xs text-gray-400">
                     {categoryLabel[file.category] || file.category}
-                    {' · '}
-                    {(file.file_size / 1024).toFixed(1)} KB
-                    {' · '}
-                    {new Date(file.created_at).toLocaleDateString('zh-CN')}
+                    {' · '}{(file.file_size / 1024).toFixed(1)} KB
+                    {' · '}{new Date(file.created_at).toLocaleDateString('zh-CN')}
                   </p>
                 </div>
                 <button
                   onClick={() => filesApi.download(file.id)}
                   className="text-indigo-600 text-sm hover:underline"
-                >
-                  下载
-                </button>
+                >下载</button>
               </div>
             ))}
           </div>
